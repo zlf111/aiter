@@ -900,6 +900,40 @@ def mxfp4_moe_gemm2(
             "FlyDSL v2 GEMM2 requires sorted_weights; "
             "doweight_stage1=True is not supported"
         )
+    if (
+        os.environ.get("AITER_MXFP4_G2_ES", "0") == "1"
+        and epilog == "reduce"
+        and str(out_dtype).strip().lower() == "fp4"
+        and a_dtype == b_dtype == "fp4"
+        and bias is None
+        and not is_ep
+        and D_INTER == 512
+        and D_HIDDEN % 256 == 0
+        and SBM % 32 == 0
+    ):
+        # Expert-stationary persistent kernel: 2 WGs per CU, full-K W2 panels.
+        from .mxmoe_gemm2_es import mxfp4_moe_gemm2_es
+
+        return mxfp4_moe_gemm2_es(
+            inter_sorted_quant,
+            inter_sorted_shuffled_scale,
+            w2_u8,
+            w2_scale_u8,
+            sorted_expert_ids,
+            cumsum_tensor,
+            sorted_token_ids,
+            out,
+            M_logical=M_logical,
+            NE=NE,
+            D_HIDDEN=D_HIDDEN,
+            D_INTER=D_INTER,
+            topk=topk,
+            SBM=SBM,
+            cu_num=cu_num if cu_num > 0 else get_cu_num(),
+            # The sort's expert table when it emitted one (see fused_moe._moe_sorting_impl).
+            expert_info=getattr(sorted_expert_ids, "aiter_expert_info", None),
+            stream=stream,
+        )
     if epilog == "scatter":
         HIDDEN_MAX = D_HIDDEN
     if bias is not None:
