@@ -112,6 +112,25 @@ def _select_seq_partition_size(
     )
 
 
+def _checked_launch(
+    launch: dict, key_cache: torch.Tensor, value_cache: torch.Tensor
+) -> dict:
+    """Drop `USE_TENSOR_DESC` when the cache layout does not fit a tensor descriptor."""
+    if not launch.get("USE_TENSOR_DESC"):
+        return launch
+    size = key_cache.element_size()
+    fits = (
+        key_cache.stride() == value_cache.stride()
+        and key_cache.stride(3) == 1
+        and all(key_cache.stride(i) * size % 16 == 0 for i in range(3))
+        and key_cache.data_ptr() % 16 == 0
+        and value_cache.data_ptr() % 16 == 0
+    )
+    return (
+        launch if fits else {k: v for k, v in launch.items() if k != "USE_TENSOR_DESC"}
+    )
+
+
 def _gqa_tdm_supported(
     query: torch.Tensor,
     key_cache: torch.Tensor,
@@ -406,7 +425,9 @@ def paged_attn_decode_v1(
             query_grp_sz_pow2 = 16
         else:
             query_grp_sz_pow2 = triton.next_power_of_2(query_grp_sz)
-        launch = _get_launch_config("v1_w_dot", kv_blk_sz) or {}
+        launch = _checked_launch(
+            _get_launch_config("v1_w_dot", kv_blk_sz) or {}, key_cache, value_cache
+        )
         _paged_attn_decode_v1_w_dot_kernel[grid](
             output,
             query,
@@ -563,7 +584,9 @@ def paged_attn_decode_v2(
             query_grp_sz_pow2 = 16
         else:
             query_grp_sz_pow2 = triton.next_power_of_2(query_grp_sz)
-        launch = _get_launch_config("v2_w_dot", kv_blk_sz) or {}
+        launch = _checked_launch(
+            _get_launch_config("v2_w_dot", kv_blk_sz) or {}, key_cache, value_cache
+        )
         _paged_attn_decode_v2_w_dot_kernel[grid](
             exp_sums,
             max_logits,
